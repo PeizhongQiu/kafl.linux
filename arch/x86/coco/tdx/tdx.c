@@ -376,7 +376,11 @@ static int ve_instr_len(struct ve_info *ve)
 
 bool tdx_debug_enabled(void)
 {
+#ifdef CONFIG_INTEL_TDX_KVM_SDV
+	return true;
+#else
 	return !!(td_attr & ATTR_DEBUG);
+#endif
 }
 
 static u64 __cpuidle __halt(const bool irq_disabled)
@@ -1034,10 +1038,12 @@ void __init tdx_early_init(void)
 	u64 cc_mask;
 	u32 eax, sig[3];
 
+#ifndef CONFIG_INTEL_TDX_KVM_SDV
 	cpuid_count(TDX_CPUID_LEAF_ID, 0, &eax, &sig[0], &sig[2],  &sig[1]);
 
 	if (memcmp(TDX_IDENT, sig, sizeof(sig)))
 		return;
+#endif
 
 	setup_force_cpu_cap(X86_FEATURE_TDX_GUEST);
 	setup_clear_cpu_cap(X86_FEATURE_MCE);
@@ -1075,6 +1081,9 @@ void __init tdx_early_init(void)
 
 	cc_set_vendor(CC_VENDOR_INTEL);
 	tdx_parse_tdinfo(&cc_mask);
+#ifdef CONFIG_INTEL_TDX_KVM_SDV
+        cc_mask = 0;
+#endif
 	cc_set_mask(cc_mask);
 
 	/* Kernel does not use NOTIFY_ENABLES and does not need random #VEs */
