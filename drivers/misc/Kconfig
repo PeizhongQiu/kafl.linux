@@ -5,6 +5,12 @@
 
 menu "Misc devices"
 
+config FUZZ_CTRL
+	bool "Fuzz Control Hypercall Device"
+	default y
+	help
+	  Provides /dev/fuzz_ctrl for notifying host to enable/disable fuzz input via hypercall.
+
 config SENSORS_LIS3LV02D
 	tristate
 	depends on INPUT
