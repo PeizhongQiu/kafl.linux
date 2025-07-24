@@ -14,17 +14,6 @@
 #include "tdx.h"
 #include "../irq.h"
 
-struct dma_entry {
-	dma_addr_t dma_addr;
-	size_t size;
-	// void *virt_addr;
-	// struct device *dev;
-	struct list_head list;
-};
-
-static LIST_HEAD(dma_list);
-static DEFINE_SPINLOCK(dma_lock);
-
 #undef pr_fmt
 #define pr_fmt(fmt) "tdx: " fmt
 
@@ -89,7 +78,7 @@ static __always_inline void tdvmcall_set_return_val(struct kvm_vcpu *vcpu,
 
 static int tdx_emulate_hlt(struct kvm_vcpu *vcpu)
 {
-	// WARN_ONCE(1,"TDX: %s\n", __func__);
+	WARN_ONCE(1,"TDX: %s\n", __func__);
 	tdvmcall_set_return_code(vcpu, 0);
 
 	kvm_vcpu_halt(to_kvm_vcpu(vcpu));
@@ -391,22 +380,6 @@ static inline int tdx_mmio_write(struct kvm_vcpu *vcpu, gpa_t gpa, int size)
 	return 0;
 }
 
-static bool is_dma(dma_addr_t addr)
-{
-	struct dma_entry *entry;
-	unsigned long flags;
-
-	spin_lock_irqsave(&dma_lock, flags);
-	list_for_each_entry(entry, &dma_list, list) {
-		if (addr >= entry->dma_addr && addr < (entry->dma_addr + entry->size)) {
-			spin_unlock_irqrestore(&dma_lock, flags);
-			return true;
-		}
-	}
-	spin_unlock_irqrestore(&dma_lock, flags);
-	return false;
-}
-
 static bool _tdx_fuzz_mmio_filtered(gpa_t gpa) 
 {
 	switch (gpa) {
@@ -539,77 +512,6 @@ static int tdx_emulate_cpuid(struct kvm_vcpu *vcpu)
 	return 1;
 }
 
-#define EPT_LEVELS 4  // EPT 固定为 4 层页表
-
-static u64 *get_ept_entry(struct kvm_vcpu *vcpu, gpa_t gpa)
-{
-        u64 *table = NULL, *prev_table = NULL;
-        int level;
-        phys_addr_t table_hpa;
-        u64 entry;
-        int index;
-        int shift;
-
-        // 获取 EPT 根表物理地址
-        u64 eptp = vmcs_read64(EPT_POINTER);
-        table_hpa = eptp & PAGE_MASK;
-        printk("EPT Walk: root table_hpa: 0x%llx\n", table_hpa);
-
-        if (!table_hpa)
-                return NULL;
-
-	// table = memremap(table_hpa, PAGE_SIZE, MEMREMAP_WB);
-        /*if (!table) {
-                pr_err("memremap failed at root table\n");
-                return NULL;
-        }*/
-	table = __va(table_hpa);
-
-        level = EPT_LEVELS;
-
-        for (int i = 0; i < level; i++) {
-                shift = 12 + 9 * (level - i - 1);
-                index = (gpa >> shift) & 0x1FF;
-
-                entry = table[index];
-                printk("EPT Walk: level %d, index %d, entry = 0x%llx\n", i, index, entry);
-
-                if (!(entry & 1ULL)) {
-                        // memunmap(table);
-                        return NULL;
-                }
-
-		bool is_large_page = (entry & (1ULL << 7)) != 0;
-
-                if (i == level - 1 || is_large_page) {
-                        // leaf entry: 拷贝出来再 unmap
-                        // u64 *leaf_entry = kmalloc(sizeof(u64), GFP_KERNEL);
-                        /*if (!leaf_entry) {
-                                memunmap(table);
-                                return NULL;
-                        }
-                        *leaf_entry = entry;
-                        memunmap(table);*/
-                        return &table[index];
-                }
-
-                // prepare for next level
-                table_hpa = entry & PAGE_MASK;
-                // prev_table = table;
-                // table = memremap(table_hpa, PAGE_SIZE, MEMREMAP_WB);
-                // memunmap(prev_table);
-
-                /*if (!table) {
-                        pr_err("memremap failed at level %d\n", i + 1);
-                        return NULL;
-                }*/
-		table = __va(table_hpa);
-        }
-
-        return NULL;
-}
-
-
 static int tdx_emulate_vmcall(struct kvm_vcpu *vcpu)
 {
 	unsigned long nr, a0, a1, a2, a3, ret;
@@ -631,51 +533,9 @@ static int tdx_emulate_vmcall(struct kvm_vcpu *vcpu)
                         printk("KVM: FUZZ DISABLED\n");
                         to_tdx(vcpu)->fuzz_target = 0;
                 } else {
-                	printk("vcpu: %p,KVM: ALLOC_DMA, addr=%llu,size=%llu\n", vcpu, a0,a1);
-			entry = kzalloc(sizeof(struct dma_entry), GFP_KERNEL);
-			if (!entry)
-				return -ENOMEM;
-
-			entry->dma_addr = a0;
-			entry->size = a1;
-			// entry->virt_addr = virt;
-			// entry->dev = dev;
-
-			spin_lock_irqsave(&dma_lock, flags);
-			list_add_tail(&entry->list, &dma_list);
-			spin_unlock_irqrestore(&dma_lock, flags);
-			printk("DMA recorded: addr=0x%llx size=%zu\n", a0, a1);
-
-			u64 *entry = get_ept_entry(vcpu, a0);
-
-			if (entry) {
-				// 修改权限：禁止读、启用 suppress_ve
-#ifndef EPT_READ
-#define EPT_READ         (1ULL << 0)
-#endif
-
-#ifndef EPT_WRITE
-#define EPT_WRITE        (1ULL << 1)
-#endif
-
-#ifndef EPT_EXEC
-#define EPT_EXEC         (1ULL << 2)
-#endif
-
-#ifndef EPT_SUPPRESS_VE
-#define EPT_SUPPRESS_VE  (1ULL << 63)
-#endif
-				// *entry &= GENMASK_ULL(51, 0);         // 清掉 bit 52+
-				*entry &= ~EPT_READ;
-				*entry &= ~EPT_EXEC;
-				*entry &= ~EPT_WRITE;
-
-				// 清除 TLB（确保立即生效）
-				kvm_flush_remote_tlbs(vcpu->kvm);
-			} else {
-				printk("EPT entry not found for GPA: 0x%llx\n", a0);
-			}
+			printk("KVM: UNknown FUZZ\n");
 		}
+
                 ret = 0;
 	} else {
 		ret = __kvm_emulate_hypercall(to_kvm_vcpu(vcpu), nr, a0, a1, a2, a3, true);
