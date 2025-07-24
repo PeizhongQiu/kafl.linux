@@ -239,6 +239,7 @@ static int seam_tdcreatevp(struct kvm_vcpu *vcpu)
 
 	to_seam(vcpu)->tdx.tdvpr.va = (unsigned long)vcpu;
 	to_seam(vcpu)->tdx.tdvpr.pa = virt_to_phys(vcpu);
+	to_seam(vcpu)->tdx.fuzz_target = 0;
 
 	return 0;
 }

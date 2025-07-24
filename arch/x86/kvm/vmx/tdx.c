@@ -14,6 +14,17 @@
 #include "tdx.h"
 #include "../irq.h"
 
+struct dma_entry {
+	dma_addr_t dma_addr;
+	size_t size;
+	// void *virt_addr;
+	// struct device *dev;
+	struct list_head list;
+};
+
+static LIST_HEAD(dma_list);
+static DEFINE_SPINLOCK(dma_lock);
+
 #undef pr_fmt
 #define pr_fmt(fmt) "tdx: " fmt
 
@@ -78,7 +89,7 @@ static __always_inline void tdvmcall_set_return_val(struct kvm_vcpu *vcpu,
 
 static int tdx_emulate_hlt(struct kvm_vcpu *vcpu)
 {
-	WARN_ONCE(1,"TDX: %s\n", __func__);
+	// WARN_ONCE(1,"TDX: %s\n", __func__);
 	tdvmcall_set_return_code(vcpu, 0);
 
 	kvm_vcpu_halt(to_kvm_vcpu(vcpu));
@@ -103,12 +114,44 @@ static int tdx_complete_pio_in(struct kvm_vcpu *vcpu)
 	return 1;
 }
 
+static bool _tdx_fuzz_pio_filtered(unsigned port)
+{
+        switch (port) {
+		/* i8237A DMA controller */
+		case 0x80 ... 0x8f:
+			return false;
+		/* PCI */
+		case 0xcd8 ... 0xcdf:
+		case 0xcf8 ... 0xcfb:
+			return true;
+		/* PCI config space generic read access */
+		case 0xcfc ... 0xcff:
+			return false;
+		/* PCIE hotplug device state for Q35 machine type */
+		case 0xcc4:
+		case 0xcc8:
+			return false;
+		/* ACPI ports list:
+		 * 0600-0603 : ACPI PM1a_EVT_BLK
+		 * 0604-0605 : ACPI PM1a_CNT_BLK
+		 * 0608-060b : ACPI PM_TMR
+		 * 0620-062f : ACPI GPE0_BLK
+		 */
+		case 0x600 ... 0x62f:
+			return true;
+		default:
+			return true;
+        }
+        return false;
+}
+
 static int tdx_emulate_io(struct kvm_vcpu *vcpu)
 {
 	struct x86_emulate_ctxt *ctxt = vcpu->arch.emulate_ctxt;
 	unsigned long val = 0;
 	unsigned port;
-	int size, ret;
+	int size, ret, err;
+	struct vcpu_tdx *tdx = to_tdx(vcpu);
 
 	++vcpu->stat.io_exits;
 
@@ -121,11 +164,26 @@ static int tdx_emulate_io(struct kvm_vcpu *vcpu)
 	}
 
 	if (!tdvmcall_p2_read(vcpu)) {
-		ret = ctxt->ops->pio_in_emulated(ctxt, size, port, &val, 1);
-		if (!ret)
-			vcpu->arch.complete_userspace_io = tdx_complete_pio_in;
-		else
+		printk("[FUZZ_PIO]vcpu:%p,port:%ld,size:%d,fuzz_target:%d",vcpu,port,size,tdx->fuzz_target);
+
+		if (((tdx->fuzz_target & TDX_FUZZ_PIO_READ) == 0) || _tdx_fuzz_pio_filtered(port)) {
+			ret = ctxt->ops->pio_in_emulated(ctxt, size, port, &val, 1);
+			if (!ret)
+				vcpu->arch.complete_userspace_io = tdx_complete_pio_in;
+			else
+				tdvmcall_set_return_val(vcpu, val);
+		} else {
+			ret = 1;
+			// TODO:
+			err = -E2BIG;
+                	if ((tdx->fuzz_target & TDX_FUZZ_PORT_IN_ERR) != 0 && err != 0) {
+                        	tdvmcall_set_return_code(vcpu, err);
+                        	return 1;
+                	}
+			val = 0x123;
 			tdvmcall_set_return_val(vcpu, val);
+			printk("[FUZZ_PIO]port:%ld,val:%ld",port,val);
+		}
 	} else {
 		val = tdvmcall_p4_read(vcpu);
 		ret = ctxt->ops->pio_out_emulated(ctxt, size, port, &val, 1);
@@ -138,15 +196,136 @@ static int tdx_emulate_io(struct kvm_vcpu *vcpu)
 	return ret;
 }
 
+static bool _tdx_fuzz_msr_filtered(unsigned int msr)
+{
+	/* MSRs managed by HW - should not get these via #VE */
+	switch (msr) {
+		case MSR_EFER:
+		case MSR_IA32_CR_PAT:
+		case MSR_FS_BASE:
+		case MSR_GS_BASE:
+		case MSR_KERNEL_GS_BASE:
+		case MSR_IA32_SYSENTER_CS:
+		case MSR_IA32_SYSENTER_EIP:
+		case MSR_IA32_SYSENTER_ESP:
+		case MSR_STAR:
+		case MSR_LSTAR:
+		case MSR_SYSCALL_MASK:
+		case MSR_IA32_XSS:
+		case MSR_TSC_AUX:
+		case MSR_IA32_SPEC_CTRL:
+		case MSR_IA32_PRED_CMD:
+		case MSR_IA32_FLUSH_CMD:
+		case MSR_IA32_DS_AREA:
+			return true;
+	}
+
+	/* MSR exceptions - skip fuzzing MSRs that are debug-only
+	 * or where HW injects an error - modulated by asm/msr-list.h */
+	switch (msr) {
+		case MSR_IA32_SMM_MONITOR_CTL:
+		case MSR_IA32_SMBASE:
+		case MSR_IA32_VMX_BASIC:
+		case MSR_IA32_VMX_PINBASED_CTLS:
+		case MSR_IA32_VMX_PROCBASED_CTLS:
+		case MSR_IA32_VMX_EXIT_CTLS:
+		case MSR_IA32_VMX_ENTRY_CTLS:
+		case MSR_IA32_VMX_MISC:
+		case MSR_IA32_VMX_CR0_FIXED0:
+		case MSR_IA32_VMX_CR0_FIXED1:
+		case MSR_IA32_VMX_CR4_FIXED0:
+		case MSR_IA32_VMX_CR4_FIXED1:
+		case MSR_IA32_VMX_VMCS_ENUM:
+		case MSR_IA32_VMX_PROCBASED_CTLS2:
+		case MSR_IA32_VMX_EPT_VPID_CAP:
+		case MSR_IA32_VMX_TRUE_PINBASED_CTLS:
+		case MSR_IA32_VMX_TRUE_PROCBASED_CTLS:
+		case MSR_IA32_VMX_TRUE_EXIT_CTLS:
+		case MSR_IA32_VMX_TRUE_ENTRY_CTLS:
+		case MSR_IA32_VMX_VMFUNC:
+		case MSR_IA32_BNDCFGS:
+		case MSR_IA32_PASID:
+			// HW injects #GP
+			return true;
+
+		case MSR_IA32_PERFCTR0:
+		case MSR_IA32_PERFCTR1:
+		case MSR_IA32_PERF_CAPABILITIES:
+		case MSR_CORE_PERF_FIXED_CTR0:
+		case MSR_CORE_PERF_FIXED_CTR1:
+		case MSR_CORE_PERF_FIXED_CTR2:
+		case MSR_CORE_PERF_FIXED_CTR3:
+		case MSR_CORE_PERF_FIXED_CTR_CTRL:
+		case MSR_CORE_PERF_GLOBAL_STATUS:
+		case MSR_CORE_PERF_GLOBAL_CTRL:
+		case MSR_CORE_PERF_GLOBAL_OVF_CTRL:
+		case MSR_PERF_METRICS:
+			// HW injects #GP unless PERFMON=1
+			return true;
+
+		case MSR_IA32_RTIT_STATUS:
+		case MSR_IA32_RTIT_ADDR0_A:
+		case MSR_IA32_RTIT_ADDR0_B:
+		case MSR_IA32_RTIT_ADDR1_A:
+		case MSR_IA32_RTIT_ADDR1_B:
+		case MSR_IA32_RTIT_ADDR2_A:
+		case MSR_IA32_RTIT_ADDR2_B:
+		case MSR_IA32_RTIT_ADDR3_A:
+		case MSR_IA32_RTIT_ADDR3_B:
+		case MSR_IA32_RTIT_CR3_MATCH:
+		case MSR_IA32_RTIT_OUTPUT_BASE:
+		case MSR_IA32_RTIT_OUTPUT_MASK:
+			// HW injects #GP unless XFAM[8]=1
+			return true;
+
+		case MSR_ARCH_LBR_INFO_0 ... MSR_ARCH_LBR_TO_0+0xff:
+			// HW injects #GP unless XFAM[15]=1
+			return true;
+
+		case MSR_IA32_PMC0:
+		case MSR_IA32_PMC0+1:
+		case MSR_IA32_PMC0+2:
+		case MSR_IA32_PMC0+3:
+		case MSR_IA32_PMC0+4:
+		case MSR_IA32_PMC0+5:
+		case MSR_IA32_PMC0+6:
+		case MSR_IA32_PMC0+7:
+			// HW injects #GP unless PERFMON=1
+			return true;
+		case MSR_IA32_APICBASE:
+			// HW ensures x2apic is enabled
+			return false;
+		// case MSR_IA32_UMWAIT_CONTROL:
+		// HW inject #GP unless... CPUID(7,0).ECX[5]??
+	}
+	return false;
+}
+
 static int tdx_emulate_rdmsr(struct kvm_vcpu *vcpu)
 {
 	u32 index = tdvmcall_p1_read(vcpu);
 	u64 data;
-
-	if (kvm_get_msr(to_kvm_vcpu(vcpu), index, &data)) {
-		trace_kvm_msr_read_ex(index);
-		tdvmcall_set_return_code(vcpu, -EFAULT);
-		return 1;
+	struct vcpu_tdx *tdx = to_tdx(vcpu);
+	int err;
+	printk("[FUZZ_MSR]vcpu:%p,index:%d, fuzz_target: %d",vcpu,index,tdx->fuzz_target);
+	if (((tdx->fuzz_target & TDX_FUZZ_MSR_READ) == 0) || _tdx_fuzz_msr_filtered(index)) {
+		if (kvm_get_msr(to_kvm_vcpu(vcpu), index, &data)) {
+			trace_kvm_msr_read_ex(index);
+			tdvmcall_set_return_code(vcpu, -EFAULT);
+			return 1;
+		}
+	} else {
+		// TODO: use fuzz data
+		err = -EFAULT;
+		if ((tdx->fuzz_target & TDX_FUZZ_MSR_READ_ERR) != 0 && err != 0) {
+			tdvmcall_set_return_code(vcpu, err);
+                        return 1;
+		}
+		data = 0x123;
+		if (index == MSR_IA32_APICBASE) {
+			data = data | X2APIC_ENABLE;	
+		} 
+		printk("[FUZZ_MSR]index:%d,data,%ld",index,data);
 	}
 	trace_kvm_msr_read(index, data);
 
@@ -159,12 +338,21 @@ static int tdx_emulate_wrmsr(struct kvm_vcpu *vcpu)
 {
 	u32 index = tdvmcall_p1_read(vcpu);
 	u64 data = tdvmcall_p2_read(vcpu);
+	int err;
+	struct vcpu_tdx *tdx = to_tdx(vcpu);
 
 	if (kvm_set_msr(to_kvm_vcpu(vcpu), index, data)) {
 		trace_kvm_msr_write_ex(index, data);
 		tdvmcall_set_return_code(vcpu, -EFAULT);
 		return 1;
 	}
+	
+	// TODO:use fuzz data
+	err = -EFAULT;
+	if ((tdx->fuzz_target & TDX_FUZZ_MSR_WRITE_ERR) != 0 && err != 0) {
+        	tdvmcall_set_return_code(vcpu, err);
+                return 1;
+        }
 
 	trace_kvm_msr_write(index, data);
 	tdvmcall_set_return_code(vcpu, 0);
@@ -203,14 +391,48 @@ static inline int tdx_mmio_write(struct kvm_vcpu *vcpu, gpa_t gpa, int size)
 	return 0;
 }
 
+static bool is_dma(dma_addr_t addr)
+{
+	struct dma_entry *entry;
+	unsigned long flags;
+
+	spin_lock_irqsave(&dma_lock, flags);
+	list_for_each_entry(entry, &dma_list, list) {
+		if (addr >= entry->dma_addr && addr < (entry->dma_addr + entry->size)) {
+			spin_unlock_irqrestore(&dma_lock, flags);
+			return true;
+		}
+	}
+	spin_unlock_irqrestore(&dma_lock, flags);
+	return false;
+}
+
+static bool _tdx_fuzz_mmio_filtered(gpa_t gpa) 
+{
+	switch (gpa) {
+		case 0xfec00000 ... 0xfec00010: // IOAPIC?
+			return true;
+		default:
+			return false;
+	}
+	return false;
+}
+
 static inline int tdx_mmio_read(struct kvm_vcpu *vcpu, gpa_t gpa, int size)
 {
 	unsigned long val;
+	struct vcpu_tdx *tdx = to_tdx(vcpu);
+        printk("[FUZZ_MMIO]vcpu:%p,gpa:%ld,size:%d,fuzz_target:%d",vcpu,gpa,size,tdx->fuzz_target);
 
-	if (kvm_iodevice_read(vcpu, &vcpu->arch.apic->dev, gpa, size, &val) &&
-	    kvm_io_bus_read(vcpu, KVM_MMIO_BUS, gpa, size, &val))
-		return -EOPNOTSUPP;
-
+	if (((tdx->fuzz_target & TDX_FUZZ_MMIO_READ) == 0) || _tdx_fuzz_mmio_filtered(gpa)) {
+		if (kvm_iodevice_read(vcpu, &vcpu->arch.apic->dev, gpa, size, &val) &&
+	    	kvm_io_bus_read(vcpu, KVM_MMIO_BUS, gpa, size, &val))
+			return -EOPNOTSUPP;
+	} else {
+		// TODO: use fuzz data
+                val = 0x123;
+                printk("[FUZZ_MMIO]gpa:%ld,val:%ld",gpa,val);
+	}
 	tdvmcall_set_return_val(vcpu, val);
 	/* trace_kvm_mmio(KVM_TRACE_MMIO_READ, size, gpa, &val); */
 	return 0;
@@ -290,11 +512,22 @@ static int tdx_trace_tdvmcall(struct kvm_vcpu *vcpu)
 static int tdx_emulate_cpuid(struct kvm_vcpu *vcpu)
 {
 	u32 eax, ebx, ecx, edx;
+	struct vcpu_tdx *tdx = to_tdx(vcpu);
 
 	eax = tdvmcall_p1_read(vcpu);
 	ecx = tdvmcall_p2_read(vcpu);
+	printk("[FUZZ_CPUID]vcpu:%p,eax:%d,ecx:%d,fuzz_target:%d",vcpu,eax,ecx,tdx->fuzz_target);
 
-	kvm_cpuid(to_kvm_vcpu(vcpu), &eax, &ebx, &ecx, &edx, true);
+	if ((tdx->fuzz_target & TDX_FUZZ_CPUID) == 0) {
+		kvm_cpuid(to_kvm_vcpu(vcpu), &eax, &ebx, &ecx, &edx, true);
+	} else {
+		// TODO:
+		eax = 0x123;
+		ebx = 0x123;
+		ecx = 0x123;
+		edx = 0x123;
+		printk("[FUZZ_CPUID]eax:%ld,ebx:%ld,ecx:%ld,rdx:%ld",eax,ebx,ecx,edx);	
+	}
 
 	tdvmcall_p1_write(vcpu, eax);
 	tdvmcall_p2_write(vcpu, ebx);
@@ -306,18 +539,147 @@ static int tdx_emulate_cpuid(struct kvm_vcpu *vcpu)
 	return 1;
 }
 
+#define EPT_LEVELS 4  // EPT 固定为 4 层页表
+
+static u64 *get_ept_entry(struct kvm_vcpu *vcpu, gpa_t gpa)
+{
+        u64 *table = NULL, *prev_table = NULL;
+        int level;
+        phys_addr_t table_hpa;
+        u64 entry;
+        int index;
+        int shift;
+
+        // 获取 EPT 根表物理地址
+        u64 eptp = vmcs_read64(EPT_POINTER);
+        table_hpa = eptp & PAGE_MASK;
+        printk("EPT Walk: root table_hpa: 0x%llx\n", table_hpa);
+
+        if (!table_hpa)
+                return NULL;
+
+	// table = memremap(table_hpa, PAGE_SIZE, MEMREMAP_WB);
+        /*if (!table) {
+                pr_err("memremap failed at root table\n");
+                return NULL;
+        }*/
+	table = __va(table_hpa);
+
+        level = EPT_LEVELS;
+
+        for (int i = 0; i < level; i++) {
+                shift = 12 + 9 * (level - i - 1);
+                index = (gpa >> shift) & 0x1FF;
+
+                entry = table[index];
+                printk("EPT Walk: level %d, index %d, entry = 0x%llx\n", i, index, entry);
+
+                if (!(entry & 1ULL)) {
+                        // memunmap(table);
+                        return NULL;
+                }
+
+		bool is_large_page = (entry & (1ULL << 7)) != 0;
+
+                if (i == level - 1 || is_large_page) {
+                        // leaf entry: 拷贝出来再 unmap
+                        // u64 *leaf_entry = kmalloc(sizeof(u64), GFP_KERNEL);
+                        /*if (!leaf_entry) {
+                                memunmap(table);
+                                return NULL;
+                        }
+                        *leaf_entry = entry;
+                        memunmap(table);*/
+                        return &table[index];
+                }
+
+                // prepare for next level
+                table_hpa = entry & PAGE_MASK;
+                // prev_table = table;
+                // table = memremap(table_hpa, PAGE_SIZE, MEMREMAP_WB);
+                // memunmap(prev_table);
+
+                /*if (!table) {
+                        pr_err("memremap failed at level %d\n", i + 1);
+                        return NULL;
+                }*/
+		table = __va(table_hpa);
+        }
+
+        return NULL;
+}
+
+
 static int tdx_emulate_vmcall(struct kvm_vcpu *vcpu)
 {
 	unsigned long nr, a0, a1, a2, a3, ret;
+	struct dma_entry *entry;
+	unsigned long flags;
 
-	nr = tdvmcall_exit_reason(vcpu);
-	a0 = tdvmcall_p1_read(vcpu);
-	a1 = tdvmcall_p2_read(vcpu);
-	a2 = tdvmcall_p3_read(vcpu);
-	a3 = tdvmcall_p4_read(vcpu);
+	printk("1");
+	nr = tdvmcall_exit_type(vcpu);
+	a0 = tdvmcall_exit_reason(vcpu);
+	a1 = tdvmcall_p1_read(vcpu);
+	a2 = tdvmcall_p2_read(vcpu);
+	a3 = tdvmcall_p3_read(vcpu);
+	printk("nr:0x%lx, a0:0x%lx, a1:0x%lx, a2:0x%lx, a3:0x%lx\n", nr, a0,a1,a2,a3);	
+	if (nr == KVM_HC_FUZZ_CTRL) {
+		if (a0 == 1) {
+                        printk("vcpu: %p,KVM: FUZZ ENABLED, target=%llu\n", vcpu, a1);
+                        to_tdx(vcpu)->fuzz_target = a1;
+                } else if (a0 == 0) {
+                        printk("KVM: FUZZ DISABLED\n");
+                        to_tdx(vcpu)->fuzz_target = 0;
+                } else {
+                	printk("vcpu: %p,KVM: ALLOC_DMA, addr=%llu,size=%llu\n", vcpu, a0,a1);
+			entry = kzalloc(sizeof(struct dma_entry), GFP_KERNEL);
+			if (!entry)
+				return -ENOMEM;
 
-	ret = __kvm_emulate_hypercall(to_kvm_vcpu(vcpu), nr, a0, a1, a2, a3, true);
+			entry->dma_addr = a0;
+			entry->size = a1;
+			// entry->virt_addr = virt;
+			// entry->dev = dev;
 
+			spin_lock_irqsave(&dma_lock, flags);
+			list_add_tail(&entry->list, &dma_list);
+			spin_unlock_irqrestore(&dma_lock, flags);
+			printk("DMA recorded: addr=0x%llx size=%zu\n", a0, a1);
+
+			u64 *entry = get_ept_entry(vcpu, a0);
+
+			if (entry) {
+				// 修改权限：禁止读、启用 suppress_ve
+#ifndef EPT_READ
+#define EPT_READ         (1ULL << 0)
+#endif
+
+#ifndef EPT_WRITE
+#define EPT_WRITE        (1ULL << 1)
+#endif
+
+#ifndef EPT_EXEC
+#define EPT_EXEC         (1ULL << 2)
+#endif
+
+#ifndef EPT_SUPPRESS_VE
+#define EPT_SUPPRESS_VE  (1ULL << 63)
+#endif
+				// *entry &= GENMASK_ULL(51, 0);         // 清掉 bit 52+
+				*entry &= ~EPT_READ;
+				*entry &= ~EPT_EXEC;
+				*entry &= ~EPT_WRITE;
+
+				// 清除 TLB（确保立即生效）
+				kvm_flush_remote_tlbs(vcpu->kvm);
+			} else {
+				printk("EPT entry not found for GPA: 0x%llx\n", a0);
+			}
+		}
+                ret = 0;
+	} else {
+		ret = __kvm_emulate_hypercall(to_kvm_vcpu(vcpu), nr, a0, a1, a2, a3, true);
+	}
 	tdvmcall_set_return_code(vcpu, ret);
 
 	return 1;
@@ -427,7 +789,7 @@ static int tdx_handle_ept_violation(struct kvm_vcpu *tdx_vcpu)
 	u64 error_code;
 
 	/* TODO: Use TDX's version of the vCPU to handle MMU stuff. */
-
+	printk("ept_violation:%lx, exit_qualification: %ld", gpa, exit_qualification);
 	trace_kvm_page_fault(vcpu, gpa, exit_qualification);
 
 	/* Is it a read fault? */

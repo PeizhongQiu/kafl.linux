@@ -11,6 +11,14 @@
 //TODO move to seam commit
 extern bool __read_mostly emulate_seam;
 
+#define TDX_FUZZ_MSR_READ 1
+#define TDX_FUZZ_MMIO_READ 2
+#define TDX_FUZZ_PIO_READ 4
+#define TDX_FUZZ_CPUID 8
+#define TDX_FUZZ_MSR_READ_ERR 16
+#define TDX_FUZZ_MSR_WRITE_ERR 32
+#define TDX_FUZZ_PORT_IN_ERR 64
+
 struct tdx_td_page {
 	unsigned long va;
 	hpa_t pa;
@@ -86,6 +94,7 @@ struct vcpu_tdx {
 	} tdvmcall;
 
 	union tdx_exit_reason exit_reason;
+	int fuzz_target;
 };
 
 static inline bool is_td(struct kvm *kvm)
