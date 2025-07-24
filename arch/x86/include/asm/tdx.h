@@ -17,6 +17,8 @@
 #define TDX_ERROR			_BITUL(63)
 #define TDX_SW_ERROR			(TDX_ERROR | GENMASK_ULL(47, 40))
 #define TDX_SEAMCALL_VMFAILINVALID	(TDX_SW_ERROR | _UL(0xFFFF0000))
+#define TDX_FUZZ_VIRTIO_GET_BUF 128
+#define TDX_FUZZ_VIRTIO_TO_CPU 256
 
 #ifndef __ASSEMBLY__
 
@@ -39,6 +41,7 @@ struct ve_info {
 #ifdef CONFIG_INTEL_TDX_GUEST
 
 extern int tdx_notify_irq;
+extern int tdx_fuzz_target;
 
 bool tdx_debug_enabled(void);
 

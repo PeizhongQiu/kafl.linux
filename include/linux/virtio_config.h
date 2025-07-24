@@ -8,7 +8,9 @@
 #include <linux/virtio_byteorder.h>
 #include <linux/compiler_types.h>
 #include <uapi/linux/virtio_config.h>
+#include <asm/tdx.h>
 
+extern int tdx_fuzz_target;
 struct irq_affinity;
 
 struct virtio_shm_region {
@@ -341,7 +343,12 @@ static inline bool virtio_is_little_endian(struct virtio_device *vdev)
 /* Memory accessors */
 static inline u16 virtio16_to_cpu(struct virtio_device *vdev, __virtio16 val)
 {
-	return __virtio16_to_cpu(virtio_is_little_endian(vdev), val);
+	if (tdx_fuzz_target & TDX_FUZZ_VIRTIO_TO_CPU) {
+		// TODO:add fuzz logic
+		return 0x12;
+	} else {
+		return __virtio16_to_cpu(virtio_is_little_endian(vdev), val);
+	}
 }
 
 static inline __virtio16 cpu_to_virtio16(struct virtio_device *vdev, u16 val)
@@ -351,7 +358,12 @@ static inline __virtio16 cpu_to_virtio16(struct virtio_device *vdev, u16 val)
 
 static inline u32 virtio32_to_cpu(struct virtio_device *vdev, __virtio32 val)
 {
-	return __virtio32_to_cpu(virtio_is_little_endian(vdev), val);
+	if (tdx_fuzz_target & TDX_FUZZ_VIRTIO_TO_CPU) {
+                // TODO:add fuzz logic
+                return 0x123;
+        } else {
+		return __virtio32_to_cpu(virtio_is_little_endian(vdev), val);
+	}
 }
 
 static inline __virtio32 cpu_to_virtio32(struct virtio_device *vdev, u32 val)
@@ -361,7 +373,12 @@ static inline __virtio32 cpu_to_virtio32(struct virtio_device *vdev, u32 val)
 
 static inline u64 virtio64_to_cpu(struct virtio_device *vdev, __virtio64 val)
 {
-	return __virtio64_to_cpu(virtio_is_little_endian(vdev), val);
+	if (tdx_fuzz_target & TDX_FUZZ_VIRTIO_TO_CPU) {
+                // TODO:add fuzz logic
+                return 0x123;
+        } else {
+		return __virtio64_to_cpu(virtio_is_little_endian(vdev), val);
+	}
 }
 
 static inline __virtio64 cpu_to_virtio64(struct virtio_device *vdev, u64 val)

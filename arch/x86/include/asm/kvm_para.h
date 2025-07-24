@@ -63,7 +63,7 @@ static inline long kvm_hypercall2(unsigned int nr, unsigned long p1,
 				  unsigned long p2)
 {
 	long ret;
-
+	printk("%d,%ld,%ld",nr,p1,p2);
 	if (cpu_feature_enabled(X86_FEATURE_TDX_GUEST))
 		return tdx_kvm_hypercall(nr, p1, p2, 0, 0);
 

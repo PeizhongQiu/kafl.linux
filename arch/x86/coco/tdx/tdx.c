@@ -54,6 +54,9 @@
 int tdx_notify_irq = -1;
 EXPORT_SYMBOL_GPL(tdx_notify_irq);
 
+int tdx_fuzz_target = 0;
+EXPORT_SYMBOL_GPL(tdx_fuzz_target);
+
 /* Caches TD Attributes from TDG.VP.INFO TDCALL */
 static u64 td_attr;
 
@@ -112,6 +115,7 @@ static __always_inline u64 hcall_func(u64 exit_reason)
 long tdx_kvm_hypercall(unsigned int nr, unsigned long p1, unsigned long p2,
 		       unsigned long p3, unsigned long p4)
 {
+	printk("%d,%ld,%ld,%ld,%ld",nr,p1,p2,p3,p4);
 	struct tdx_hypercall_args args = {
 		.r10 = nr,
 		.r11 = p1,
@@ -518,6 +522,8 @@ static int handle_cpuid(struct pt_regs *regs, struct ve_info *ve)
 		.r13 = regs->cx,
 	};
 
+	printk("cpuid");
+
 	/*
 	 * Only allow VMM to control range reserved for hypervisor
 	 * communication.
@@ -553,6 +559,7 @@ static int handle_cpuid(struct pt_regs *regs, struct ve_info *ve)
 
 static bool mmio_read(int size, unsigned long addr, unsigned long *val)
 {
+	printk("addr:%ld, size: %d", addr, size);
 	struct tdx_hypercall_args args = {
 		.r10 = TDX_HYPERCALL_STANDARD,
 		.r11 = hcall_func(EXIT_REASON_EPT_VIOLATION),
@@ -952,6 +959,7 @@ static int virt_exception_kernel(struct pt_regs *regs, struct ve_info *ve)
 	case EXIT_REASON_CPUID:
 		return handle_cpuid(regs, ve);
 	case EXIT_REASON_EPT_VIOLATION:
+		printk("2");
 		if (is_private_gpa(ve->gpa))
 			panic("Unexpected EPT-violation on private memory.");
 		return handle_mmio(regs, ve);
