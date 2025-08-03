@@ -4918,6 +4918,7 @@ static void vmx_enable_nmi_window(struct kvm_vcpu *vcpu)
 
 static void vmx_inject_irq(struct kvm_vcpu *vcpu, bool reinjected)
 {
+	printk("vmx_inject_irq\n");
 	struct vcpu_vmx *vmx = to_vmx(vcpu);
 	uint32_t intr;
 	int irq = vcpu->arch.interrupt.nr;
@@ -4939,6 +4940,7 @@ static void vmx_inject_irq(struct kvm_vcpu *vcpu, bool reinjected)
 			     vmx->vcpu.arch.event_exit_inst_len);
 	} else
 		intr |= INTR_TYPE_EXT_INTR;
+	printk("vmx_inject_irq:intr:0x%x\n",intr);
 	vmcs_write32(VM_ENTRY_INTR_INFO_FIELD, intr);
 
 	vmx_clear_hlt(vcpu);

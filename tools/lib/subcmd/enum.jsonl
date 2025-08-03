@@ -1,0 +1,1 @@
+{"filename":"/home/qpz/lab/kafl.linux/include/linux/kvm_host.h:1732","name":"kvm_stat_kind","source":"enum kvm_stat_kind {\n\tKVM_STAT_VM,\n\tKVM_STAT_VCPU,\n}"}

@@ -1,0 +1,3 @@
+{"filename":"./include/linux/seqlock.h:274:1 <Spelling=./include/linux/seqlock.h:199:9>:199","name":"seqcount_raw_spinlock","source":"struct seqcount_##lockname {\t\t\t\t\t\\\n\tseqcount_t\t\tseqcount;\t\t\t\t\\\n\t__SEQ_LOCK(locktype\t*lock);\t\t\t\t\t\\\n}"}
+{"filename":"./include/linux/seqlock.h:275:1 <Spelling=./include/linux/seqlock.h:199:9>:199","name":"seqcount_spinlock","source":"struct seqcount_##lockname {\t\t\t\t\t\\\n\tseqcount_t\t\tseqcount;\t\t\t\t\\\n\t__SEQ_LOCK(locktype\t*lock);\t\t\t\t\t\\\n}"}
+{"filename":"/home/qpz/lab/kafl.linux/drivers/mmc/core/mmc_ops.c:63","name":"mmc_op_cond_busy_data","source":"struct mmc_op_cond_busy_data {\n\tstruct mmc_host *host;\n\tu32 ocr;\n\tstruct mmc_command *cmd;\n}"}

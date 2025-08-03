@@ -155,6 +155,9 @@ static inline void *irq_desc_get_handler_data(struct irq_desc *desc)
  */
 static inline void generic_handle_irq_desc(struct irq_desc *desc)
 {
+	// printk("handler_3");
+	if (desc == irq_to_desc(33))
+		printk("handler_3: desc->handle_irq:%p",desc->handle_irq);
 	desc->handle_irq(desc);
 }
 

@@ -1,0 +1,2 @@
+{"alias":"seqcount_raw_spinlock","filename":"./include/linux/seqlock.h:274:1 <Spelling=./include/linux/seqlock.h:198:96>:198","name":"seqcount_raw_spinlock_t","source":""}
+{"alias":"seqcount_spinlock","filename":"./include/linux/seqlock.h:275:1 <Spelling=./include/linux/seqlock.h:198:96>:198","name":"seqcount_spinlock_t","source":""}

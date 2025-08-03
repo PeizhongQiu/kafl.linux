@@ -31,6 +31,7 @@
 #define KVM_HC_SCHED_YIELD		11
 #define KVM_HC_MAP_GPA_RANGE		12
 #define KVM_HC_FUZZ_CTRL		20
+#define KVM_HC_INJECT_IRQ  21
 /*
  * hypercalls use architecture specific
  */

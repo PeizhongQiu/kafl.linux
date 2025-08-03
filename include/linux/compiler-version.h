@@ -1,14 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-
-#ifdef  __LINUX_COMPILER_VERSION_H
-#error "Please do not include <linux/compiler-version.h>. This is done by the build system."
-#endif
+#ifndef __LINUX_COMPILER_VERSION_H
 #define __LINUX_COMPILER_VERSION_H
 
-/*
- * This header exists to force full rebuild when the compiler is upgraded.
- *
- * When fixdep scans this, it will find this string "CONFIG_CC_VERSION_TEXT"
- * and add dependency on include/config/CC_VERSION_TEXT, which is touched
- * by Kconfig when the version string from the compiler changes.
- */
+/* Minimal shim for builds that -include this file */
+#ifdef __clang__
+# define LINUX_COMPILER_VERSION (__clang_major__ * 10000 + __clang_minor__ * 100 + __clang_patchlevel__)
+# define LINUX_COMPILER_IS_CLANG 1
+#else
+# define LINUX_COMPILER_VERSION (__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__)
+# define LINUX_COMPILER_IS_GCC 1
+#endif
+
+#endif /* __LINUX_COMPILER_VERSION_H */

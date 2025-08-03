@@ -233,7 +233,7 @@ u64 arch_irq_stat(void)
 static __always_inline void handle_irq(struct irq_desc *desc,
 				       struct pt_regs *regs)
 {
-	if (IS_ENABLED(CONFIG_X86_64))
+	if (IS_ENABLED(CONFIG_X86_64)) 
 		generic_handle_irq_desc(desc);
 	else
 		__handle_irq(desc, regs);
@@ -252,7 +252,11 @@ DEFINE_IDTENTRY_IRQ(common_interrupt)
 	RCU_LOCKDEP_WARN(!rcu_is_watching(), "IRQ failed to wake up RCU");
 
 	desc = __this_cpu_read(vector_irq[vector]);
+	if (vector == 33)
+		printk("common_interrupt:vector:%d",vector);
 	if (likely(!IS_ERR_OR_NULL(desc))) {
+		if (vector == 33)
+			printk("common_interrupt:vector:%d",vector);
 		handle_irq(desc, regs);
 	} else {
 		ack_APIC_irq();

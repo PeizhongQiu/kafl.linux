@@ -1,0 +1,1 @@
+{"alias":"__compar_fn_t","filename":"/usr/include/stdlib.h:816","name":"__compar_fn_t","source":"typedef int (*__compar_fn_t) (const void *, const void *)"}
