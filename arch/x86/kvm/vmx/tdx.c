@@ -537,7 +537,23 @@ static int tdx_emulate_vmcall(struct kvm_vcpu *vcpu)
 		}
 
                 ret = 0;
-	} else {
+	} else if (nr == KVM_HC_INJECT_IRQ) {
+		unsigned long irq = a0;  // hypercall 参数从 a0 获取
+    		if (irq >= 256) {
+        		printk("irq:%d error!!!\n",irq);
+			ret = 0;
+		}
+		printk("Injecting IRQ %lu from hypercall\n", irq);
+		printk("vcpu:%p,to_kvm_vcpu:%p",vcpu,to_kvm_vcpu(vcpu));
+
+    		// 将 IRQ 注入到 guest 中
+    		kvm_queue_interrupt(to_kvm_vcpu(vcpu), irq, false); // 软中断
+		printk("[KVM] Queued IRQ: %d\n", to_kvm_vcpu(vcpu)->arch.interrupt.nr);
+    		// static_call(kvm_x86_enable_irq_window)(vcpu);
+		// kvm_x86_ops.enable_irq_window(to_kvm_vcpu(vcpu));
+		kvm_make_request(KVM_REQ_EVENT, to_kvm_vcpu(vcpu));
+		ret = 0; // hypercall 返回值
+	} else{
 		ret = __kvm_emulate_hypercall(to_kvm_vcpu(vcpu), nr, a0, a1, a2, a3, true);
 	}
 	tdvmcall_set_return_code(vcpu, ret);
@@ -649,7 +665,7 @@ static int tdx_handle_ept_violation(struct kvm_vcpu *tdx_vcpu)
 	u64 error_code;
 
 	/* TODO: Use TDX's version of the vCPU to handle MMU stuff. */
-	printk("ept_violation:%lx, exit_qualification: %ld", gpa, exit_qualification);
+	// printk("ept_violation:%lx, exit_qualification: %ld", gpa, exit_qualification);
 	trace_kvm_page_fault(vcpu, gpa, exit_qualification);
 
 	/* Is it a read fault? */

@@ -130,6 +130,7 @@ static int __set_sregs2(struct kvm_vcpu *vcpu, struct kvm_sregs2 *sregs2);
 static void __get_sregs2(struct kvm_vcpu *vcpu, struct kvm_sregs2 *sregs2);
 
 struct kvm_x86_ops kvm_x86_ops __read_mostly;
+EXPORT_SYMBOL_GPL(kvm_x86_ops);
 
 #define KVM_X86_OP(func)					     \
 	DEFINE_STATIC_CALL_NULL(kvm_x86_##func,			     \
@@ -10077,9 +10078,11 @@ static int kvm_check_and_inject_events(struct kvm_vcpu *vcpu,
 
 	if (kvm_cpu_has_injectable_intr(vcpu)) {
 		r = can_inject ? static_call(kvm_x86_interrupt_allowed)(vcpu, true) : -EBUSY;
+		printk("kvm_check_and_inject_events:%d\n",r);
 		if (r < 0)
 			goto out;
 		if (r) {
+			printk("kvm_check_and_inject_events_2\n");
 			kvm_queue_interrupt(vcpu, kvm_cpu_get_interrupt(vcpu), false);
 			static_call(kvm_x86_inject_irq)(vcpu, false);
 			WARN_ON(static_call(kvm_x86_interrupt_allowed)(vcpu, true) < 0);
