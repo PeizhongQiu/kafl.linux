@@ -42,6 +42,11 @@ struct ve_info {
 
 extern int tdx_notify_irq;
 extern int tdx_fuzz_target;
+#define DMA_BUF_LEN     0x10000
+extern char tdx_fuzz_dma_data[DMA_BUF_LEN];
+
+u64 fuzz_dma_value(size_t len);
+char *fuzz_dma_buf(size_t len);
 
 bool tdx_debug_enabled(void);
 

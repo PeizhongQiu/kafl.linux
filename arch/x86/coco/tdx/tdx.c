@@ -57,6 +57,40 @@ EXPORT_SYMBOL_GPL(tdx_notify_irq);
 int tdx_fuzz_target = 0;
 EXPORT_SYMBOL_GPL(tdx_fuzz_target);
 
+#define DMA_BUF_LEN     0x10000
+char tdx_fuzz_dma_data[DMA_BUF_LEN] = {0};
+EXPORT_SYMBOL_GPL(tdx_fuzz_dma_data);
+
+static int dma_index = 0;
+u64 fuzz_dma_value(size_t len) {
+	u64 v = 0;
+    	for (size_t i = 0; i < len; ++i) {
+        	v = (v << 8) | (uint8_t)tdx_fuzz_dma_data[dma_index];
+        	dma_index = (dma_index + 1) % DMA_BUF_LEN;
+    	}
+    	return v;
+}
+
+char *fuzz_dma_buf(size_t len) {
+	char *dst = (char *)kmalloc(len, GFP_KERNEL);
+	if (!dst) return NULL;
+	
+    	size_t written = 0;
+    	size_t i = dma_index;
+    	size_t rem = len;
+
+    	while (rem > 0) {
+        	size_t chunk = DMA_BUF_LEN - i; 
+        	if (chunk > rem) chunk = rem;
+        	memcpy(dst + written, tdx_fuzz_dma_data + i, chunk);
+        	written += chunk;
+        	rem -= chunk;
+        	i = 0;       
+    	}
+	dma_index = (dma_index + len) % DMA_BUF_LEN;
+	return dst;
+}
+
 /* Caches TD Attributes from TDG.VP.INFO TDCALL */
 static u64 td_attr;
 

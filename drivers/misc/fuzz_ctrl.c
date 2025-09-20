@@ -11,7 +11,9 @@
 #include <linux/dma-mapping.h>
 #include <linux/dma-direct.h>
 #include <asm/tdx.h>
+#include <asm/page.h>
 #include <linux/kallsyms.h>
+#include <linux/string.h>
 
 #define DEVICE_NAME "fuzz_ctrl"
 #define CLASS_NAME  "fuzz"
@@ -25,7 +27,7 @@
 #define ALLOC_DMA _IO(FUZZ_MAGIC, 0x03)
 #define IRQ_DUMP _IO(FUZZ_MAGIC, 0x07)
 #define IDT_DUMP _IO(FUZZ_MAGIC, 0x08)
-#define INJECT_IRQ_TEST _IOW(FUZZ_MAGIC, 0x9, int)
+#define INJECT_IRQ_TEST _IOW(FUZZ_MAGIC, 0x9, int) 
 
 static dev_t dev_num;
 static struct cdev fuzz_cdev;
@@ -36,8 +38,21 @@ static void *coherent_buf;
 static dma_addr_t coherent_dma_handle;
 #define BUF_SIZE 4096
 #define IDT_ENTRIES 256
-extern int tdx_fuzz_target;
+#define BUF_LEN 0x400
+#define DMA_BUF_LEN	0x10000
 
+extern int tdx_fuzz_target;
+extern char tdx_fuzz_dma_data[DMA_BUF_LEN];
+
+typedef struct fuzz_input {
+    char msr_data[BUF_LEN];
+    char cpuid_data[BUF_LEN];
+    char pio_data[BUF_LEN];
+    char mmio_data[BUF_LEN];
+    char dma_data[DMA_BUF_LEN];
+}fuzz_input;
+#define PREPARE_DATA    _IO(FUZZ_MAGIC, 0x10)
+// static fuzz_input fuzz_tdx_input;
 // IDT 结构
 struct my_desc_ptr {
     unsigned short size;
@@ -62,31 +77,7 @@ static unsigned long get_gate_offset(struct gate_desc *desc) {
            ((unsigned long)desc->offset_high << 32);
 }
 
-// 虚拟 irq_chip（不访问硬件）
-// 定义一些空函数来替代 noop_irq_* 函数
-static void dummy_irq_enable(struct irq_data *data) { }
-static void dummy_irq_disable(struct irq_data *data) { }
-static void dummy_irq_ack(struct irq_data *data) { }
-static void dummy_irq_mask(struct irq_data *data) { }
-static void dummy_irq_unmask(struct irq_data *data) { }
-static struct irq_chip fake_chip = {
-    .name = "fake_chip",
-    .irq_enable = dummy_irq_enable,
-    .irq_disable = dummy_irq_disable,
-    .irq_ack = dummy_irq_ack,
-    .irq_mask = dummy_irq_mask,
-    .irq_unmask = dummy_irq_unmask,
-};
-
 static int global_var = 100;
-
-static irqreturn_t my_irq_handler(int irq, void *dev)
-{
-    pr_info("[HANDLER] IRQ %d triggered\n", irq);
-    global_var += 42;
-    return IRQ_HANDLED;
-}
-
 
 static long fuzz_ctrl_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
@@ -98,6 +89,7 @@ static long fuzz_ctrl_ioctl(struct file *file, unsigned int cmd, unsigned long a
     struct gate_desc *idt;
     int i;
     int ret;
+    fuzz_input *fuzz_tdx_input = kmalloc(sizeof(*fuzz_tdx_input), GFP_KERNEL);;
 
     switch (cmd) {
     case FUZZ_ENABLE:
@@ -199,35 +191,20 @@ static long fuzz_ctrl_ioctl(struct file *file, unsigned int cmd, unsigned long a
     	return 0;	
     case INJECT_IRQ_TEST:
 	irq = 33;
-	// Step 1: 动态分配一个中断号
-    	irq = __irq_alloc_descs(irq, irq, 1, 0,
-                            NULL, NULL);
-    	if (irq < 0) {
-        	pr_err("Failed to allocate irq_desc, ret = %d\n", irq);
-        	return irq;
-    	}
-    	pr_info("Allocated IRQ %d\n", irq);
-	// 安装一个 fake irq_chip
-    	irq_set_chip(irq, &fake_chip);
-    	irq_set_handler(irq, handle_level_irq);  // 使用电平触发方式
-
-    	ret = request_irq(irq, my_irq_handler, 0, "myirq", NULL);
-    	if (ret < 0) {
-        	pr_err("Failed to register IRQ %d, ret = %d\n", irq, ret);
-        	return ret;
-    	}
-
-    	pr_info("Before triggering: global_var = %d\n", global_var);
-	// generic_handle_irq(irq);  // 主动触发（模拟中断到来）
-	// int temp = 0;
-	// while (global_var == 100) {
-		// pr_info("temp:%d, global_var = %d\n", temp, global_var);
-		kvm_hypercall1(KVM_HC_INJECT_IRQ, irq);
-		// ++temp;
-	// }
-    	pr_info("After triggering : global_var = %d\n", global_var);
+	pr_info("before inject");
+	kvm_hypercall1(KVM_HC_INJECT_IRQ, irq);
+    	pr_info("After triggering");
 
     	return 0;
+
+    case PREPARE_DATA:
+	if (fuzz_tdx_input == NULL || copy_from_user(fuzz_tdx_input, (void __user *)arg, sizeof(fuzz_input)))
+            return -EFAULT;
+        pr_info("prepare data: msr_data: %s;\ncpuid_data: %s\npio_data: %s\n mmio_data: %s\ndma_data: %s\n", fuzz_tdx_input->msr_data, fuzz_tdx_input->cpuid_data, fuzz_tdx_input->pio_data, fuzz_tdx_input->mmio_data, fuzz_tdx_input->dma_data);
+        
+	kvm_hypercall1(KVM_HC_PREPARE_DATA, __pa(fuzz_tdx_input));
+	memcpy(tdx_fuzz_dma_data, fuzz_tdx_input->dma_data, DMA_BUF_LEN);
+	return 0;
     default:
 	pr_info("Not_found!");
         return -ENOTTY;

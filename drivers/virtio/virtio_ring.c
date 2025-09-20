@@ -19,7 +19,6 @@
 #include <asm/tdx.h>
 
 extern int tdx_fuzz_target;
-
 #ifdef DEBUG
 /* For development, we want to crash whenever the ring is screwed. */
 #define BAD_RING(_vq, fmt, args...)				\
@@ -2322,13 +2321,13 @@ EXPORT_SYMBOL_GPL(virtqueue_get_buf_ctx);
 
 void *virtqueue_get_buf(struct virtqueue *_vq, unsigned int *len)
 {
-	if (tdx_fuzz_target & TDX_FUZZ_VIRTIO_GET_BUF) {
-		// TODO: add fuzz
-		void *buf = kmalloc(*len, GFP_KERNEL);
-		memset(buf, 0xFF, *len);
-		return (void *)buf;
+	char *buf;
+
+	buf = virtqueue_get_buf_ctx(_vq, len, NULL);
+	if (tdx_fuzz_target && TDX_FUZZ_VIRTIO_GET_BUF && buf != NULL) {
+		buf = fuzz_dma_buf(*len);
 	} 
-	return virtqueue_get_buf_ctx(_vq, len, NULL);
+	return (void *)buf;
 }
 EXPORT_SYMBOL_GPL(virtqueue_get_buf);
 /**
