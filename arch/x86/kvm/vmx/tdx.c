@@ -33,6 +33,53 @@ BUILD_TDVMCALL_ACCESSORS(p2, r13);
 BUILD_TDVMCALL_ACCESSORS(p3, r14);
 BUILD_TDVMCALL_ACCESSORS(p4, r15);
 
+#define BUF_LEN 0x400
+#define DMA_BUF_LEN     0x10000
+
+typedef struct fuzz_input {
+    char msr_data[BUF_LEN];
+    char cpuid_data[BUF_LEN];
+    char pio_data[BUF_LEN];
+    char mmio_data[BUF_LEN];
+    char dma_data[DMA_BUF_LEN];
+}fuzz_input;
+static fuzz_input fuzz_tdx_input;
+static int msr_data_index = 0;
+static int cpuid_data_index = 0;
+static int pio_data_index = 0;
+static int mmio_data_index = 0;
+
+
+static inline u64 fuzz_value(char *buf, size_t buf_len,
+                              int *index, size_t len)
+{
+    u64 v = 0;
+    for (size_t i = 0; i < len; ++i) {
+        v = (v << 8) | (uint8_t)buf[*index];
+	*index = (*index + 1) % buf_len;
+    }
+    return v;
+}
+
+static inline u64 tdx_fuzz(int type, int len) {
+	switch (type) {
+                case TDX_FUZZ_MSR_READ:
+			return fuzz_value(fuzz_tdx_input.msr_data, BUF_LEN, &msr_data_index, len);
+                case TDX_FUZZ_MMIO_READ:
+			return fuzz_value(fuzz_tdx_input.mmio_data, BUF_LEN, &mmio_data_index, len);
+                case TDX_FUZZ_PIO_READ:
+			return fuzz_value(fuzz_tdx_input.pio_data, BUF_LEN, &pio_data_index, len);
+                case TDX_FUZZ_CPUID:
+			return fuzz_value(fuzz_tdx_input.cpuid_data, BUF_LEN, &cpuid_data_index, len);
+                case TDX_FUZZ_MSR_READ_ERR:
+                case TDX_FUZZ_MSR_WRITE_ERR:
+                case TDX_FUZZ_PORT_IN_ERR:
+			return 0;
+		default:
+			return 0;
+        }	
+}
+
 static inline struct kvm_vcpu *to_kvm_vcpu(struct kvm_vcpu *vcpu)
 {
 	if (emulate_seam)
@@ -163,13 +210,12 @@ static int tdx_emulate_io(struct kvm_vcpu *vcpu)
 				tdvmcall_set_return_val(vcpu, val);
 		} else {
 			ret = 1;
-			// TODO:
-			err = -E2BIG;
+			err = tdx_fuzz(TDX_FUZZ_PORT_IN_ERR, 0);
                 	if ((tdx->fuzz_target & TDX_FUZZ_PORT_IN_ERR) != 0 && err != 0) {
                         	tdvmcall_set_return_code(vcpu, err);
                         	return 1;
                 	}
-			val = 0x123;
+			val = tdx_fuzz(TDX_FUZZ_PIO_READ, size);
 			tdvmcall_set_return_val(vcpu, val);
 			printk("[FUZZ_PIO]port:%ld,val:%ld",port,val);
 		}
@@ -304,13 +350,12 @@ static int tdx_emulate_rdmsr(struct kvm_vcpu *vcpu)
 			return 1;
 		}
 	} else {
-		// TODO: use fuzz data
-		err = -EFAULT;
+		err = tdx_fuzz(TDX_FUZZ_MSR_READ_ERR, 0);
 		if ((tdx->fuzz_target & TDX_FUZZ_MSR_READ_ERR) != 0 && err != 0) {
-			tdvmcall_set_return_code(vcpu, err);
+			tdvmcall_set_return_code(vcpu, -EFAULT);
                         return 1;
 		}
-		data = 0x123;
+		data = tdx_fuzz(TDX_FUZZ_MSR_READ, 8);
 		if (index == MSR_IA32_APICBASE) {
 			data = data | X2APIC_ENABLE;	
 		} 
@@ -336,10 +381,9 @@ static int tdx_emulate_wrmsr(struct kvm_vcpu *vcpu)
 		return 1;
 	}
 	
-	// TODO:use fuzz data
-	err = -EFAULT;
+	err = tdx_fuzz(TDX_FUZZ_MSR_WRITE_ERR, 0);
 	if ((tdx->fuzz_target & TDX_FUZZ_MSR_WRITE_ERR) != 0 && err != 0) {
-        	tdvmcall_set_return_code(vcpu, err);
+        	tdvmcall_set_return_code(vcpu, -EFAULT);
                 return 1;
         }
 
@@ -402,8 +446,7 @@ static inline int tdx_mmio_read(struct kvm_vcpu *vcpu, gpa_t gpa, int size)
 	    	kvm_io_bus_read(vcpu, KVM_MMIO_BUS, gpa, size, &val))
 			return -EOPNOTSUPP;
 	} else {
-		// TODO: use fuzz data
-                val = 0x123;
+                val = tdx_fuzz(TDX_FUZZ_MMIO_READ, size);
                 printk("[FUZZ_MMIO]gpa:%ld,val:%ld",gpa,val);
 	}
 	tdvmcall_set_return_val(vcpu, val);
@@ -494,12 +537,11 @@ static int tdx_emulate_cpuid(struct kvm_vcpu *vcpu)
 	if ((tdx->fuzz_target & TDX_FUZZ_CPUID) == 0) {
 		kvm_cpuid(to_kvm_vcpu(vcpu), &eax, &ebx, &ecx, &edx, true);
 	} else {
-		// TODO:
-		eax = 0x123;
-		ebx = 0x123;
-		ecx = 0x123;
-		edx = 0x123;
-		printk("[FUZZ_CPUID]eax:%ld,ebx:%ld,ecx:%ld,rdx:%ld",eax,ebx,ecx,edx);	
+		eax = tdx_fuzz(TDX_FUZZ_CPUID, 4);
+		ebx = tdx_fuzz(TDX_FUZZ_CPUID, 4);
+		ecx = tdx_fuzz(TDX_FUZZ_CPUID, 4);
+		edx = tdx_fuzz(TDX_FUZZ_CPUID, 4);
+		printk("[FUZZ_CPUID]eax:%ld,ebx:%ld,ecx:%ld,edx:%ld",eax,ebx,ecx,edx);	
 	}
 
 	tdvmcall_p1_write(vcpu, eax);
@@ -553,7 +595,21 @@ static int tdx_emulate_vmcall(struct kvm_vcpu *vcpu)
 		// kvm_x86_ops.enable_irq_window(to_kvm_vcpu(vcpu));
 		kvm_make_request(KVM_REQ_EVENT, to_kvm_vcpu(vcpu));
 		ret = 0; // hypercall 返回值
-	} else{
+	} else if (nr == KVM_HC_PREPARE_DATA) {
+		unsigned long gpa = a0;
+
+		int idx = srcu_read_lock(&to_kvm_vcpu(vcpu)->kvm->srcu);        // 保护 memslots
+		ret = kvm_read_guest(to_kvm_vcpu(vcpu)->kvm, gpa, &fuzz_tdx_input, sizeof(fuzz_tdx_input));
+		pr_info("prepare data: msr_data: %s;\ncpuid_data: %s\npio_data: %s\n mmio_data: %s\ndma_data: %s\n", fuzz_tdx_input.msr_data, fuzz_tdx_input.cpuid_data, fuzz_tdx_input.pio_data, fuzz_tdx_input.mmio_data, fuzz_tdx_input.dma_data);
+		srcu_read_unlock(&to_kvm_vcpu(vcpu)->kvm->srcu, idx);
+
+		msr_data_index = 0;
+		cpuid_data_index = 0;
+		pio_data_index = 0;
+		mmio_data_index = 0;
+
+		ret = 0;
+	} else {
 		ret = __kvm_emulate_hypercall(to_kvm_vcpu(vcpu), nr, a0, a1, a2, a3, true);
 	}
 	tdvmcall_set_return_code(vcpu, ret);
