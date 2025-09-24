@@ -33,6 +33,8 @@
 #define KVM_HC_FUZZ_CTRL		20
 #define KVM_HC_INJECT_IRQ  21
 #define KVM_HC_PREPARE_DATA 22
+#define KVM_HC_REGISTER_IRQ 23
+#define KVM_HC_CLEAR_IRQ 24
 /*
  * hypercalls use architecture specific
  */

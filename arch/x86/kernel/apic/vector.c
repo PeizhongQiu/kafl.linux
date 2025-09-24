@@ -20,6 +20,7 @@
 #include <asm/i8259.h>
 #include <asm/desc.h>
 #include <asm/irq_remapping.h>
+// #include <uapi/linux/kvm_para.h>
 
 #include <asm/trace/irq_vectors.h>
 
@@ -251,6 +252,8 @@ assign_vector_locked(struct irq_data *irqd, const struct cpumask *dest)
 		return vector;
 	apic_update_vector(irqd, vector, cpu);
 	apic_update_irq_cfg(irqd, vector, cpu);
+	// pr_info("assign_vector_locked:irq:%d,vector:%d",irqd->irq,vector);
+	// kvm_hypercall2(KVM_HC_REGISTER_IRQ, irqd->irq, vector);
 
 	return 0;
 }
@@ -328,6 +331,8 @@ assign_managed_vector(struct irq_data *irqd, const struct cpumask *dest)
 		return vector;
 	apic_update_vector(irqd, vector, cpu);
 	apic_update_irq_cfg(irqd, vector, cpu);
+	// pr_info("assign_vector_locked:irq:%d,vector:%d",irqd->irq,vector);
+	// kvm_hypercall2(KVM_HC_REGISTER_IRQ, irqd->irq, vector);
 	return 0;
 }
 
@@ -347,6 +352,8 @@ static void clear_irq_vector(struct irq_data *irqd)
 
 	per_cpu(vector_irq, apicd->cpu)[vector] = VECTOR_SHUTDOWN;
 	irq_matrix_free(vector_matrix, apicd->cpu, vector, managed);
+	// pr_info("clear_irq_vector:irq:%d,vector:%d",irqd->irq,vector);
+	// kvm_hypercall2(KVM_HC_CLEAR_IRQ, irqd->irq, vector);
 	apicd->vector = 0;
 
 	/* Clean up move in progress */
