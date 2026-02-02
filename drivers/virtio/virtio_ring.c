@@ -2324,7 +2324,7 @@ void *virtqueue_get_buf(struct virtqueue *_vq, unsigned int *len)
 	char *buf;
 
 	buf = virtqueue_get_buf_ctx(_vq, len, NULL);
-	if (tdx_fuzz_target && TDX_FUZZ_VIRTIO_GET_BUF && buf != NULL) {
+	if ((tdx_fuzz_target & TDX_FUZZ_VIRTIO_GET_BUF) && buf != NULL) {
 		buf = fuzz_dma_buf(*len);
 	} 
 	return (void *)buf;

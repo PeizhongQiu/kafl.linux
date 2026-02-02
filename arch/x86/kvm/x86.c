@@ -10125,13 +10125,10 @@ static int kvm_check_and_inject_events(struct kvm_vcpu *vcpu,
 	}
 
 	if (kvm_cpu_has_injectable_intr(vcpu)) {
-		printk("kvm_check_and_inject_events_1\n");
 		r = can_inject ? static_call(kvm_x86_interrupt_allowed)(vcpu, true) : -EBUSY;
-		printk("kvm_check_and_inject_events:%d\n",r);
 		if (r < 0)
 			goto out;
 		if (r) {
-			printk("kvm_check_and_inject_events_2\n");
 			kvm_queue_interrupt(vcpu, kvm_cpu_get_interrupt(vcpu), false);
 			static_call(kvm_x86_inject_irq)(vcpu, false);
 			WARN_ON(static_call(kvm_x86_interrupt_allowed)(vcpu, true) < 0);
@@ -10548,7 +10545,6 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 
 	if (kvm_check_request(KVM_REQ_EVENT, vcpu) || req_int_win ||
 	    kvm_xen_has_interrupt(vcpu)) {
-		printk("enter_guest_1\n");
 		++vcpu->stat.req_event;
 		r = kvm_apic_accept_events(vcpu);
 		if (r < 0) {
