@@ -14,6 +14,8 @@
 #include <asm/page.h>
 #include <linux/kallsyms.h>
 #include <linux/string.h>
+#include <linux/file.h>
+#include <linux/kasan.h>
 
 #define DEVICE_NAME "fuzz_ctrl"
 #define CLASS_NAME  "fuzz"
@@ -50,6 +52,7 @@ typedef struct fuzz_input {
     char pio_data[BUF_LEN];
     char mmio_data[BUF_LEN];
     char dma_data[DMA_BUF_LEN];
+    // char interrupt_data[BUF_LEN];
 }fuzz_input;
 #define PREPARE_DATA    _IO(FUZZ_MAGIC, 0x10)
 // static fuzz_input fuzz_tdx_input;
@@ -77,7 +80,63 @@ static unsigned long get_gate_offset(struct gate_desc *desc) {
            ((unsigned long)desc->offset_high << 32);
 }
 
-static int global_var = 100;
+// static int poison_from_file()
+// {
+//     struct file *filp;
+//     char *buf, *line, *p;
+//     loff_t pos = 0;
+//     ssize_t ret;
+
+//     buf = kzalloc(PAGE_SIZE, GFP_KERNEL);
+//     if (!buf)
+//         return -ENOMEM;
+
+//     const char path[] = "/root/addr.txt";
+
+//     filp = filp_open(path, O_RDONLY, 0);
+//     if (IS_ERR(filp)) {
+//         pr_err("[kasan] open %s failed\n", path);
+//         ret = PTR_ERR(filp);
+//         goto out;
+//     }
+
+//     while (1) {
+//         bytes_read = kernel_read(filp, buf, PAGE_SIZE - 1, &pos);
+
+//         // 如果读取出错或文件已读完，则跳出循环
+//         if (bytes_read <= 0) {
+//             if (bytes_read < 0) {
+//                 pr_err("[kasan] kernel_read failed with %zd\n", bytes_read);
+//                 ret = bytes_read;
+//             }
+//             break; // 正常读完 (bytes_read == 0) 或出错
+//         }
+
+//         // 确保缓冲区内容是 null-terminated
+//         buf[bytes_read] = '\0';
+//         chunk = buf;
+
+//         while ((line = strsep(&chunk, "\n")) != NULL) {
+//             unsigned long addr;
+            
+//             // 如果 strsep 到了缓冲区的末尾，但没有找到换行符，
+//             // 这一行可能是不完整的。在真实代码中需要更复杂的处理
+//             // 来拼接跨越缓冲区边界的行。为简化，我们暂时忽略这种情况。
+//             if (sscanf(line, "%lx", &addr) != 1)
+//                 continue;
+
+//             pr_info("[kasan] poison addr=%px\n", (void *)addr);
+//             kasan_poison((void *)addr, 1, KASAN_GENERIC_REDZONE);
+//         }
+//     }
+
+// // 标签重命名以保持清晰
+// out_close_filp:
+//     filp_close(filp, NULL);
+// out_free_buf:
+//     kfree(buf);
+//     return ret;
+// }
 
 static long fuzz_ctrl_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
@@ -96,68 +155,18 @@ static long fuzz_ctrl_ioctl(struct file *file, unsigned int cmd, unsigned long a
         if (copy_from_user(&target, (int __user *)arg, sizeof(int)))
             return -EFAULT;
         pr_info("fuzz_ctrl: Enabling fuzz on target: %d\n", target);
-	tdx_fuzz_target = target;
+	    tdx_fuzz_target = target;
         kvm_hypercall2(KVM_HC_FUZZ_CTRL, 1, target);
         return 0;
 
     case FUZZ_DISABLE:
         pr_info("fuzz_ctrl: Disabling fuzz\n");
-	tdx_fuzz_target = 0;
+	    tdx_fuzz_target = 0;
         kvm_hypercall2(KVM_HC_FUZZ_CTRL, 0, 0);
         return 0;
-    case READ_PORT8:
-    case READ_PORT16:
-    case READ_PORT32:
-        if (copy_from_user(&target, (int __user *)arg, sizeof(int)))
-            return -EFAULT;
-
-        switch (cmd) {
-        case READ_PORT8:
-            pr_info("PIO:%d %d",target, inb(target));
-            break;
-        case READ_PORT16:
-            pr_info("PIO:%d %d",target, inw(target));
-            break;
-        case READ_PORT32:
-            pr_info("PIO:%d %d",target, inl(target));
-            break;
-        }
-        return 0;
-    case ALLOC_DMA:
-	pr_info("dma_test: init\n");
-
-	// 获取一个 dummy 虚拟设备（可以绑定到真实 platform/pci device）
-	dma_dev = kzalloc(sizeof(struct device), GFP_KERNEL);
-	if (!dma_dev)
-		return -ENOMEM;
-
-	dev_set_name(dma_dev, "dma_test_dev");
-	device_initialize(dma_dev);
-
-	// 设置 dma_mask 和 coherent_dma_mask
-	dma_dev->coherent_dma_mask = DMA_BIT_MASK(64);
-	dma_dev->dma_mask = &dma_dev->coherent_dma_mask;
-
-
-	/* -------- 1. coherent buffer 分配并访问 -------- */
-	coherent_buf = dma_alloc_coherent(dma_dev, BUF_SIZE, &coherent_dma_handle, GFP_KERNEL);
-	if (!coherent_buf) {
-		pr_err("dma_test: Failed to alloc coherent buffer\n");
-		return -ENOMEM;
-	}
-
-	pr_info("dma_test: coherent buffer vaddr=%p, dma_handle=0x%llx\n",
-	        coherent_buf, (unsigned long long)coherent_dma_handle);
-	kvm_hypercall2(KVM_HC_FUZZ_CTRL, coherent_dma_handle, BUF_SIZE);
-	// 写入内容
-	strcpy(coherent_buf, "hello from coherent dma buffer");
-	pr_info("dma_test: readback: %s\n", (char *)coherent_buf);
-	strcpy(coherent_buf, "hello from coherent dma buffer");
-        pr_info("dma_test: readback: %s\n", (char *)coherent_buf);
-	return 0;
     case IRQ_DUMP:
-	pr_info("[irq_dump] Dumping IRQ handlers:\n");
-	pr_info("[irq_dump] nr_irq: %d\n",nr_irqs);
+	    pr_info("[irq_dump] Dumping IRQ handlers:\n");
+	    pr_info("[irq_dump] nr_irq: %d\n",nr_irqs);
     	for (irq = 0; irq < nr_irqs; irq++) {
         	desc = irq_to_desc(irq);
         	if (!desc)
@@ -171,7 +180,7 @@ static long fuzz_ctrl_ioctl(struct file *file, unsigned int cmd, unsigned long a
                     		irq, action->handler, sym, action->name ? action->name : "(null)");
         	}
     	}
-	return 0;
+	    return 0;
     case IDT_DUMP:
     	// 获取 IDT 地址
     	asm volatile("sidt %0" : "=m"(idtr));
@@ -190,25 +199,27 @@ static long fuzz_ctrl_ioctl(struct file *file, unsigned int cmd, unsigned long a
 
     	return 0;	
     case INJECT_IRQ_TEST:
-	irq = 33;
-	pr_info("before inject");
-	kvm_hypercall1(KVM_HC_INJECT_IRQ, irq);
-    	pr_info("After triggering");
-
-    	return 0;
+        irq = 33;
+        pr_info("before inject");
+        kvm_hypercall1(KVM_HC_INJECT_IRQ, irq);
+        pr_info("After triggering");
+        return 0;
 
     case PREPARE_DATA:
-	if (fuzz_tdx_input == NULL || copy_from_user(fuzz_tdx_input, (void __user *)arg, sizeof(fuzz_input)))
-            return -EFAULT;
-        pr_info("prepare data: msr_data: %s;\ncpuid_data: %s\npio_data: %s\n mmio_data: %s\ndma_data: %s\n", fuzz_tdx_input->msr_data, fuzz_tdx_input->cpuid_data, fuzz_tdx_input->pio_data, fuzz_tdx_input->mmio_data, fuzz_tdx_input->dma_data);
-        
-	kvm_hypercall1(KVM_HC_PREPARE_DATA, __pa(fuzz_tdx_input));
-	memcpy(tdx_fuzz_dma_data, fuzz_tdx_input->dma_data, DMA_BUF_LEN);
-	return 0;
+        if (fuzz_tdx_input == NULL || copy_from_user(fuzz_tdx_input, (void __user *)arg, sizeof(fuzz_input)))
+                return -EFAULT;
+        pr_info("prepare data: msr_data: %s;\ncpuid_data: %s\npio_data: %s\nmmio_data: %s\ndma_data: %s\n", 
+            fuzz_tdx_input->msr_data, fuzz_tdx_input->cpuid_data, fuzz_tdx_input->pio_data, 
+            fuzz_tdx_input->mmio_data, fuzz_tdx_input->dma_data);
+            // fuzz_tdx_input->mmio_data, fuzz_tdx_input->dma_data, fuzz_tdx_input->interrupt_data);
+            
+        kvm_hypercall1(KVM_HC_PREPARE_DATA, __pa(fuzz_tdx_input));
+        memcpy(tdx_fuzz_dma_data, fuzz_tdx_input->dma_data, DMA_BUF_LEN);
+        return 0;
     default:
-	pr_info("Not_found!");
-        return -ENOTTY;
-    }
+        pr_info("Not_found!");
+            return -ENOTTY;
+        }
 }
 static struct file_operations fops = {
     .owner = THIS_MODULE,

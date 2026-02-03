@@ -360,10 +360,10 @@ static inline __virtio16 cpu_to_virtio16(struct virtio_device *vdev, u16 val)
 static inline u32 virtio32_to_cpu(struct virtio_device *vdev, __virtio32 val)
 {
 	if (tdx_fuzz_target & TDX_FUZZ_VIRTIO_TO_CPU) {
-                u32 ret = __virtio32_to_cpu(virtio_is_little_endian(vdev), val);
-                ret = fuzz_dma_value(4);
-                return ret;
-        } else {
+		u32 ret = __virtio32_to_cpu(virtio_is_little_endian(vdev), val);
+		ret = fuzz_dma_value(4);
+		return ret;
+    } else {
 		return __virtio32_to_cpu(virtio_is_little_endian(vdev), val);
 	}
 }

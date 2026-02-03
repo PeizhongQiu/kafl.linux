@@ -64,31 +64,30 @@ EXPORT_SYMBOL_GPL(tdx_fuzz_dma_data);
 static int dma_index = 0;
 u64 fuzz_dma_value(size_t len) {
 	u64 v = 0;
-    	for (size_t i = 0; i < len; ++i) {
-        	v = (v << 8) | (uint8_t)tdx_fuzz_dma_data[dma_index];
-        	dma_index = (dma_index + 1) % DMA_BUF_LEN;
-    	}
-    	return v;
+	for (size_t i = 0; i < len; ++i) {
+		v = (v << 8) | (uint8_t)tdx_fuzz_dma_data[dma_index];
+		dma_index = (dma_index + 1) % DMA_BUF_LEN;
+	}
+	return v;
 }
 
-char *fuzz_dma_buf(size_t len) {
-	char *dst = (char *)kmalloc(len, GFP_KERNEL);
-	if (!dst) return NULL;
+size_t fuzz_dma_buf(void *buf, size_t num_bytes) {
+	if (!buf) return 0;
 	
-    	size_t written = 0;
-    	size_t i = dma_index;
-    	size_t rem = len;
+	size_t written = 0;
+	size_t i = dma_index;
+	size_t rem = num_bytes;
 
-    	while (rem > 0) {
-        	size_t chunk = DMA_BUF_LEN - i; 
-        	if (chunk > rem) chunk = rem;
-        	memcpy(dst + written, tdx_fuzz_dma_data + i, chunk);
-        	written += chunk;
-        	rem -= chunk;
-        	i = 0;       
-    	}
-	dma_index = (dma_index + len) % DMA_BUF_LEN;
-	return dst;
+	while (rem > 0) {
+		size_t chunk = DMA_BUF_LEN - i; 
+		if (chunk > rem) chunk = rem;
+		memcpy(buf + written, tdx_fuzz_dma_data + i, chunk);
+		written += chunk;
+		rem -= chunk;
+		i = 0;       
+	}
+	dma_index = (dma_index + num_bytes) % DMA_BUF_LEN;
+	return num_bytes;
 }
 
 /* Caches TD Attributes from TDG.VP.INFO TDCALL */

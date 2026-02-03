@@ -46,7 +46,7 @@ extern int tdx_fuzz_target;
 extern char tdx_fuzz_dma_data[DMA_BUF_LEN];
 
 u64 fuzz_dma_value(size_t len);
-char *fuzz_dma_buf(size_t len);
+size_t fuzz_dma_buf(void *buf, size_t num_bytes);
 
 bool tdx_debug_enabled(void);
 

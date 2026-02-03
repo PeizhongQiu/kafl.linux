@@ -18,6 +18,8 @@
 #include <xen/xen.h>
 #include <asm/tdx.h>
 
+#define FUZZ_REPLACE_PROBABILITY_PERCENT 5
+
 extern int tdx_fuzz_target;
 #ifdef DEBUG
 /* For development, we want to crash whenever the ring is screwed. */
@@ -2324,9 +2326,12 @@ void *virtqueue_get_buf(struct virtqueue *_vq, unsigned int *len)
 	char *buf;
 
 	buf = virtqueue_get_buf_ctx(_vq, len, NULL);
-	if ((tdx_fuzz_target & TDX_FUZZ_VIRTIO_GET_BUF) && buf != NULL) {
-		buf = fuzz_dma_buf(*len);
-	} 
+
+	if ((tdx_fuzz_target & TDX_FUZZ_VIRTIO_GET_BUF) && (buf != NULL)) {
+		
+		fuzz_dma_buf(buf, *len);
+		
+	}
 	return (void *)buf;
 }
 EXPORT_SYMBOL_GPL(virtqueue_get_buf);
