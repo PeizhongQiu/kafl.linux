@@ -61,33 +61,46 @@ EXPORT_SYMBOL_GPL(tdx_fuzz_target);
 char tdx_fuzz_dma_data[DMA_BUF_LEN] = {0};
 EXPORT_SYMBOL_GPL(tdx_fuzz_dma_data);
 
-static int dma_index = 0;
+static atomic_t dma_index = ATOMIC_INIT(0);
+
 u64 fuzz_dma_value(size_t len) {
 	u64 v = 0;
-	for (size_t i = 0; i < len; ++i) {
-		v = (v << 8) | (uint8_t)tdx_fuzz_dma_data[dma_index];
-		dma_index = (dma_index + 1) % DMA_BUF_LEN;
-	}
+	// for (size_t i = 0; i < len; ++i) {
+	// 	v = (v << 8) | (uint8_t)tdx_fuzz_dma_data[dma_index];
+	// 	dma_index = (dma_index + 1) % DMA_BUF_LEN;
+	// }
 	return v;
 }
 
 size_t fuzz_dma_buf(void *buf, size_t num_bytes) {
-	if (!buf) return 0;
-	
-	size_t written = 0;
-	size_t i = dma_index;
-	size_t rem = num_bytes;
+    if (!buf)
+        return 0;
 
-	while (rem > 0) {
-		size_t chunk = DMA_BUF_LEN - i; 
-		if (chunk > rem) chunk = rem;
-		memcpy(buf + written, tdx_fuzz_dma_data + i, chunk);
-		written += chunk;
-		rem -= chunk;
-		i = 0;       
-	}
-	dma_index = (dma_index + num_bytes) % DMA_BUF_LEN;
-	return num_bytes;
+    char *cbuf = (char *)buf;
+    size_t rem = num_bytes;
+
+    while (rem > 0) {
+        // 原子获取并增加 dma_index
+        int start = atomic_fetch_add(num_bytes, &dma_index);
+        start %= DMA_BUF_LEN; // 保证在缓冲区范围内
+
+        // 计算本次循环可以读取的长度
+        size_t chunk = DMA_BUF_LEN - start;
+        if (chunk > rem)
+            chunk = rem;
+
+        memcpy(cbuf, tdx_fuzz_dma_data + start, chunk);
+
+        cbuf += chunk;
+        rem -= chunk;
+
+        if (chunk < rem) {
+            // 如果未读完，下一轮从缓冲区开头继续
+            num_bytes = rem;
+        }
+    }
+
+    return num_bytes;
 }
 
 /* Caches TD Attributes from TDG.VP.INFO TDCALL */
