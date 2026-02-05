@@ -50,6 +50,7 @@ bool vp_notify(struct virtqueue *vq)
 /* Handle a configuration change: Tell driver if it wants to know. */
 static irqreturn_t vp_config_changed(int irq, void *opaque)
 {
+	pr_info("trigger vp_config_changed!!!");
 	struct virtio_pci_device *vp_dev = opaque;
 
 	virtio_config_changed(&vp_dev->vdev);

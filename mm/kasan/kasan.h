@@ -593,7 +593,8 @@ void kasan_restore_multi_shot(bool enabled);
  * Exported functions for interfaces called from assembly or from generated
  * code. Declared here to avoid warnings about missing declarations.
  */
-
+int kasan_add_watch(unsigned long addr, int irqs[], int count);
+extern bool kasan_watch_table_ready;
 asmlinkage void kasan_unpoison_task_stack_below(const void *watermark);
 void __asan_register_globals(struct kasan_global *globals, size_t size);
 void __asan_unregister_globals(struct kasan_global *globals, size_t size);

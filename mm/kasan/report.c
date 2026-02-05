@@ -28,13 +28,36 @@
 #include <linux/sched/task_stack.h>
 #include <linux/uaccess.h>
 #include <trace/events/error_report.h>
-
+#include <linux/msi.h>
+#include <linux/pci.h>
 #include <asm/sections.h>
+#include <uapi/linux/kvm_para.h>
+#include <linux/irq_work.h>
 
 #include "kasan.h"
 #include "../slab.h"
 
+#include <linux/hashtable.h> 
+
+#define MAX_IRQS 16
+struct kasan_watch_entry {
+    unsigned long addr;
+	int irqs[MAX_IRQS];
+	int irq_cnt;
+    struct hlist_node node;
+};
+
+#define KASAN_WATCH_HASH_BITS 8
+static DEFINE_HASHTABLE(kasan_watch_table, KASAN_WATCH_HASH_BITS);
+
+static DEFINE_SPINLOCK(kasan_watch_lock);
+
+bool kasan_watch_table_ready = false;
+EXPORT_SYMBOL_GPL(kasan_watch_table_ready);
+static int inject_irq = 0;
 static unsigned long kasan_flags;
+static void kasan_irq_work_fn(struct irq_work *work);
+static DEFINE_IRQ_WORK(kasan_irq_work, kasan_irq_work_fn);
 
 #define KASAN_BIT_REPORTED	0
 #define KASAN_BIT_MULTI_SHOT	1
@@ -503,6 +526,113 @@ void kasan_report_invalid_free(void *ptr, unsigned long ip, enum kasan_report_ty
 	end_report(&flags, ptr);
 }
 
+static void kasan_irq_work_fn(struct irq_work *work)
+{
+    struct msi_msg *msg = kmalloc(sizeof(*msg), GFP_KERNEL);
+    struct msi_desc *mdesc;
+
+    /* 这里一定是：preempt=0 irqs_on */
+    
+    mdesc = irq_get_msi_desc(inject_irq);
+	inject_irq == 0;
+    if (!mdesc)
+        return;
+
+    __pci_read_msi_msg(mdesc, msg);
+    kvm_hypercall1(KVM_HC_INJECT_IRQ, __pa(msg));
+}
+
+static bool __kasan_do_check_watch(const unsigned long addr)
+{
+    struct kasan_watch_entry *entry;
+    int irq;
+	u32 r;
+	struct msi_desc *mdesc;
+	unsigned long flags;
+	
+
+    /* watch 子系统尚未就绪 */
+    if (unlikely(!READ_ONCE(kasan_watch_table_ready)))
+        return false;
+
+    /*
+     * 中断期间直接跳过
+     *    - hardirq
+     *    - softirq
+     *    - NMI
+     */
+    if (unlikely(in_interrupt()))
+        return false;
+
+    
+    /* 正常路径：查 watch 表 */
+    spin_lock(&kasan_watch_lock);
+
+    hash_for_each_possible(kasan_watch_table, entry, node, addr) {
+        if (entry->addr != addr)
+            continue;
+		r = get_random_u32();
+        if ((r & 7)!=0) {
+            /* 不注入，直接跳过 */
+            spin_unlock(&kasan_watch_lock);
+            return true;
+        }
+
+		if (entry->irq_cnt > 0) {
+            irq = entry->irqs[r % entry->irq_cnt];
+			inject_irq = entry->irqs[irq];
+            pr_info("KASAN_WATCH HIT: addr=0x%lx inject irq=%d\n",
+                    addr, inject_irq);
+			
+			irq_work_queue(&kasan_irq_work);
+			
+        }
+		spin_unlock(&kasan_watch_lock);
+        return true;
+    }
+
+    spin_unlock(&kasan_watch_lock);
+	return false;
+}
+
+int kasan_add_watch(unsigned long addr, int irqs[], int count)
+{
+    struct kasan_watch_entry *entry;
+    int i;
+
+    if (!irqs || count <= 0)
+        return -EINVAL;
+
+    if (count > MAX_IRQS)
+        count = MAX_IRQS;
+
+    entry = kmalloc(sizeof(*entry), GFP_KERNEL);
+    if (!entry)
+        return -ENOMEM;
+
+    entry->addr = addr;
+    entry->irq_cnt = count;
+
+    for (i = 0; i < count; i++)
+        entry->irqs[i] = irqs[i];
+
+    /* 防止未使用槽位脏数据（很重要，调试友好） */
+    for (; i < MAX_IRQS; i++)
+        entry->irqs[i] = -1;
+
+    spin_lock_irq(&kasan_watch_lock);
+    hash_add(kasan_watch_table, &entry->node, entry->addr);
+    spin_unlock_irq(&kasan_watch_lock);
+
+    pr_info("KASAN_WATCH: addr=0x%lx irqs:", addr);
+    for (i = 0; i < entry->irq_cnt; i++)
+        pr_cont(" %d", entry->irqs[i]);
+    pr_cont("\n");
+
+    return 0;
+}
+EXPORT_SYMBOL_GPL(kasan_add_watch);
+
 /*
  * kasan_report() is the only reporting function that uses
  * user_access_save/restore(): kasan_report_invalid_free() cannot be called
@@ -516,6 +646,10 @@ bool kasan_report(unsigned long addr, size_t size, bool is_write,
 	unsigned long ua_flags = user_access_save();
 	unsigned long irq_flags;
 	struct kasan_report_info info;
+
+	if (!is_write && __kasan_do_check_watch(addr)) {
+		return true;
+	}
 
 	if (unlikely(report_suppressed()) || unlikely(!report_enabled())) {
 		ret = false;
