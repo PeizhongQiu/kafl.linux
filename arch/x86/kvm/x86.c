@@ -9733,6 +9733,12 @@ unsigned long __kvm_emulate_hypercall(struct kvm_vcpu *vcpu, unsigned long nr,un
 		vcpu->arch.complete_userspace_io = complete_hypercall_exit;
 		return 0;
 	}
+	case KVM_HC_INJECT_IRQ:
+		u64 gpa = a0;
+		vcpu->run->exit_reason        = KVM_EXIT_HYPERCALL;
+		vcpu->run->hypercall.nr       = KVM_HC_INJECT_IRQ;
+		vcpu->run->hypercall.args[0]  = gpa;
+		return 0;
 	default:
 		ret = -KVM_ENOSYS;
 		break;

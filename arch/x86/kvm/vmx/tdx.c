@@ -4,7 +4,7 @@
 #include <linux/trace_events.h>
 #include <linux/pagemap.h>
 #include <linux/kvm_host.h>
-
+#include <linux/msi.h>
 #include <asm/virtext.h>
 
 #include "trace.h"
@@ -43,6 +43,14 @@ typedef struct fuzz_input {
     char mmio_data[BUF_LEN];
     char dma_data[DMA_BUF_LEN];
 }fuzz_input;
+// typedef struct guest_msix {
+//     uint16_t domain;
+//     uint8_t  bus;
+//     uint8_t  slot;
+//     uint8_t  func;
+//     uint16_t entry;
+// }guest_msix_t;
+
 static fuzz_input fuzz_tdx_input;
 static int msr_data_index = 0;
 static int cpuid_data_index = 0;
@@ -578,23 +586,30 @@ static int tdx_emulate_vmcall(struct kvm_vcpu *vcpu)
 			printk("KVM: UNknown FUZZ\n");
 		}
 
-                ret = 0;
+        ret = 0;
 	} else if (nr == KVM_HC_INJECT_IRQ) {
-		unsigned long irq = a0;  // hypercall 参数从 a0 获取
-    		if (irq >= 256) {
-        		printk("irq:%d error!!!\n",irq);
-			ret = 0;
-		}
-		printk("Injecting IRQ %lu from hypercall\n", irq);
-		printk("vcpu:%p,to_kvm_vcpu:%p",vcpu,to_kvm_vcpu(vcpu));
+		// unsigned long irq = a0;  // hypercall 参数从 a0 获取
+    	// if (irq >= 256) {
+        // 	printk("irq:%d error!!!\n",irq);
+		// 	ret = 0;
+		// }
+		// printk("Injecting IRQ %lu from hypercall\n", irq);
+		// printk("vcpu:%p,to_kvm_vcpu:%p",vcpu,to_kvm_vcpu(vcpu));
 
-    		// 将 IRQ 注入到 guest 中
-    		kvm_queue_interrupt(to_kvm_vcpu(vcpu), irq, false); // 软中断
-		printk("[KVM] Queued IRQ: %d\n", to_kvm_vcpu(vcpu)->arch.interrupt.nr);
-    		// static_call(kvm_x86_enable_irq_window)(vcpu);
-		// kvm_x86_ops.enable_irq_window(to_kvm_vcpu(vcpu));
-		kvm_make_request(KVM_REQ_EVENT, to_kvm_vcpu(vcpu));
-		ret = 0; // hypercall 返回值
+    	// // 将 IRQ 注入到 guest 中
+    	// kvm_queue_interrupt(to_kvm_vcpu(vcpu), irq, false); // 软中断
+		// printk("[KVM] Queued IRQ: %d\n", to_kvm_vcpu(vcpu)->arch.interrupt.nr);
+
+		// kvm_make_request(KVM_REQ_EVENT, to_kvm_vcpu(vcpu));
+		unsigned long gpa = a0;
+		int idx = srcu_read_lock(&to_kvm_vcpu(vcpu)->kvm->srcu);        // 保护 memslots
+		struct msi_msg temp;
+		ret = kvm_read_guest(to_kvm_vcpu(vcpu)->kvm, gpa, &temp, sizeof(struct msi_msg));
+		pr_info("guest_msix data: address_hi: %d;\naddress_lo: %d\ndata: %d\n", temp.address_hi, temp.address_lo, temp.data);
+		srcu_read_unlock(&to_kvm_vcpu(vcpu)->kvm->srcu, idx);
+
+		ret = __kvm_emulate_hypercall(to_kvm_vcpu(vcpu), nr, a0, a1, a2, a3, true); // hypercall 返回值
+		
 	} else if (nr == KVM_HC_PREPARE_DATA) {
 		unsigned long gpa = a0;
 
